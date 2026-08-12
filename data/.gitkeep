@@ -1,0 +1,2 @@
+# 預留 SQLite volume 目錄 - Docker 容器會把資料持久化到這裡
+# 對應 docker-compose.yml 的 ./data:/app/data volume 掛載

@@ -1,0 +1,33 @@
+{
+  "name": "@fair-value-radar/analysis-engine",
+  "version": "0.2.0",
+  "private": true,
+  "description": "分析引擎 - 公允價值 + 走勢預測 + LLM prompt 模板（M2 實作）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "lint": "echo 'no lint for analysis-engine yet'",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fair-value-radar/data-providers": "workspace:*",
+    "@fair-value-radar/llm-clients": "workspace:*",
+    "@fair-value-radar/shared-types": "workspace:*"
+  },
+  "devDependencies": {
+    "@vitest/ui": "^2.1.8",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

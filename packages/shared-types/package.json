@@ -1,0 +1,23 @@
+{
+  "name": "@fair-value-radar/shared-types",
+  "version": "0.1.0",
+  "private": true,
+  "description": "跨前後端的 TypeScript 型別定義（純型別，無 runtime）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'no lint for shared-types yet'",
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

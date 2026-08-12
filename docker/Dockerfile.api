@@ -1,0 +1,100 @@
+# =============================================================================
+# Fair Value Radar - API 服務 Dockerfile（多階段構建）
+# =============================================================================
+# builder stage：先編譯整個 monorepo
+# runtime stage：只帶 dist + node_modules slim 版本，縮小 image
+# =============================================================================
+
+# ---- 1. builder ----
+# M2 起：better-sqlite3 是 native binding。node:22-slim 沒有 Python/make/g++，
+# node-gyp rebuild 會失敗（即使 v13 官方有 prebuild，pnpm 安裝流程有時會觸發 rebuild）。
+# 解法：在 builder 階段顯式安裝 build-essential + python3。
+# runtime 階段不裝這些，維持最小 image。
+FROM node:22-slim AS builder
+
+# pnpm 啟用 corepack 內建，無需另外安裝
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN corepack enable && corepack prepare pnpm@11.21.0 --activate
+
+WORKDIR /app
+
+# 一次性裝 build-essential + python3 + ca-certificates，給 better-sqlite3 編譯 native module 用
+# （不裝這些會出現 gyp ERR! find Python / not found）
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 \
+        build-essential \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 先複製 lockfile 與 workspace yaml，最大化 Docker cache
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* .npmrc* tsconfig.base.json ./
+COPY apps/api/package.json ./apps/api/
+COPY packages/shared-types/package.json ./packages/shared-types/
+COPY packages/data-providers/package.json ./packages/data-providers/
+COPY packages/llm-clients/package.json ./packages/llm-clients/
+COPY packages/analysis-engine/package.json ./packages/analysis-engine/
+
+# 安裝所有依賴（含 devDeps，因為要 build）
+# 此時 Python/make/g++ 已就緒，better-sqlite3 的 prebuild 或 fallback rebuild 都能成功
+RUN pnpm install --frozen-lockfile=false
+
+# 再複製原始碼
+COPY apps/api ./apps/api
+COPY packages ./packages
+
+# 構建共享型別與 API（沿用根目錄的 build script：pnpm -r build）
+RUN pnpm -r build
+
+# 產出後再一次 prune，移除 devDeps，縮小 node_modules
+# CI=true 讓 pnpm 不會因為 modules dir 即將被移除而卡住等待 TTY 確認
+ENV CI=true
+RUN pnpm install --prod --frozen-lockfile=false
+
+# ---- 2. runtime ----
+# 維持 node:22-slim（builder 已編譯好原生模組，runtime 不需 build 工具）
+FROM node:22-slim AS runtime
+
+# 加入 curl 給 HEALTHCHECK 用
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# 用非 root user 跑服務（安全）
+ENV NODE_ENV=production
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN corepack enable \
+    && groupadd -g 1001 app \
+    && useradd -u 1001 -g app -m -s /bin/bash app
+
+WORKDIR /app
+
+# 只帶必要產出
+COPY --from=builder --chown=app:app /app/apps/api/dist ./apps/api/dist
+COPY --from=builder --chown=app:app /app/apps/api/package.json ./apps/api/package.json
+COPY --from=builder --chown=app:app /app/packages ./packages
+COPY --from=builder --chown=app:app /app/node_modules ./node_modules
+COPY --from=builder --chown=app:app /app/apps/api/node_modules ./apps/api/node_modules
+COPY --chown=app:app docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+    && mkdir -p /app/data && chown -R app:app /app/data
+
+USER app
+
+EXPOSE 4000
+
+ENV API_HOST=0.0.0.0 \
+    API_PORT=4000 \
+    DATABASE_PATH=/app/data/fair-value-radar.db \
+    LOG_LEVEL=info \
+    TZ=Asia/Taipei
+
+# tini 收 zombie process；entrypoint 做權限修正；CMD 跑實際服務
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["node", "apps/api/dist/index.js"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:4000/health || exit 1

@@ -1,0 +1,23 @@
+{
+  "name": "fair-value-radar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "美股/港股合理估值雷達 - monorepo 骨架",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@11.21.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "dev:api": "pnpm --filter @fair-value-radar/api dev",
+    "dev:web": "pnpm --filter @fair-value-radar/web dev",
+    "clean": "pnpm -r exec rm -rf dist node_modules .turbo"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@fair-value-radar/data-providers",
+  "version": "0.1.0",
+  "private": true,
+  "description": "資料源抽象層 - 所有行情、基本面、財報數據的統一入口",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'no lint for data-providers yet'",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fair-value-radar/shared-types": "workspace:*",
+    "yahoo-finance2": "^4.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.7.2"
+  }
+}

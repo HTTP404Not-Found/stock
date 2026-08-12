@@ -1,0 +1,64 @@
+# =============================================================================
+# Fair Value Radar - docker-compose 開發環境
+# =============================================================================
+# 啟動：
+#   docker compose -f docker/docker-compose.yml --env-file .env up
+#
+# 關閉：
+#   docker compose -f docker/docker-compose.yml down
+# =============================================================================
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    image: fair-value-radar/api:0.1.0
+    container_name: fvr-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-4000}:4000"
+    env_file:
+      - ../.env
+    environment:
+      - NODE_ENV=production
+      - API_HOST=0.0.0.0
+      - API_PORT=4000
+      - DATABASE_PATH=/app/data/fair-value-radar.db
+      - TZ=Asia/Taipei
+    volumes:
+      # SQLite 持久化到 host 的 ./data
+      - ../data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - fvr-net
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    image: fair-value-radar/web:0.1.0
+    container_name: fvr-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3080}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - fvr-net
+
+networks:
+  fvr-net:
+    driver: bridge
+    name: fvr-net

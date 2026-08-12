@@ -1,0 +1,11 @@
+# pnpm workspace 配置 - fair-value-radar monorepo
+# apps/* 為可部署應用，packages/* 為共享程式庫
+packages:
+  - 'apps/*'
+  - 'packages/*'
+allowBuilds:
+  esbuild: true
+  '@tailwindcss/oxide': true
+  sharp: true
+  better-sqlite3: true
+  yahoo-finance2: true
