@@ -3,6 +3,7 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'rec
 import { stocksApi } from '@/api/client';
 import Spinner from '@/components/Spinner';
 import ErrorBanner from '@/components/ErrorBanner';
+import { formatNumber, formatUnixSeconds } from '@/lib/utils';
 import type { OHLC } from '@fair-value-radar/shared-types';
 
 /**
@@ -25,20 +26,39 @@ export default function PriceChart({ symbol, period = '3mo' }: Props) {
     setLoading(true);
     setError(null);
     stocksApi.history(symbol, period)
-      .then((rows) => { if (!cancelled) setData(rows); })
-      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : '無法取得歷史'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .then((rows) => {
+        if (!cancelled) {
+          // 防禦：後端可能回 null / 非陣列 → 視為空陣列
+          setData(Array.isArray(rows) ? rows : []);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : '無法取得歷史');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [symbol, period]);
 
   if (loading) return <div className="flex h-48 items-center justify-center"><Spinner /></div>;
   if (error) return <ErrorBanner message={error} />;
   if (data.length === 0) return <div className="text-sm text-fg-muted">無歷史資料</div>;
 
-  const chartData = data.map((d) => ({
-    date: new Date(d.t * 1000).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' }),
-    close: d.close,
-  }));
+  // 防禦：每筆 row 可能缺欄位，用 fallback 處理
+  const chartData = data
+    .filter((d) => d && typeof d.close === 'number' && Number.isFinite(d.close))
+    .map((d) => ({
+      date: formatUnixSeconds(d.t, '—', { month: '2-digit', day: '2-digit' }),
+      close: d.close,
+    }));
+
+  // 過濾後沒有有效 close 資料
+  if (chartData.length === 0) {
+    return <div className="text-sm text-fg-muted">歷史資料格式異常</div>;
+  }
 
   return (
     <div className="h-48 w-full">
@@ -50,7 +70,8 @@ export default function PriceChart({ symbol, period = '3mo' }: Props) {
             contentStyle={{ background: 'var(--color-bg-elev)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12 }}
             labelStyle={{ color: 'var(--color-fg-muted)' }}
             itemStyle={{ color: 'var(--color-fg)' }}
-            formatter={(v) => (typeof v === 'number' ? v.toFixed(2) : String(v ?? ''))}
+            // 防禦：recharts 傳進來的值可能是 undefined / null / string
+            formatter={(v) => formatNumber(typeof v === 'number' ? v : Number(v), 2, '—')}
           />
           <Line type="monotone" dataKey="close" stroke="var(--color-accent)" strokeWidth={2} dot={false} />
         </LineChart>

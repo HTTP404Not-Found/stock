@@ -20,7 +20,8 @@ export default function Tabs({ items, activeId, onChange, className }: TabsProps
     <div className={cn('w-full', className)}>
       <div
         role="tablist"
-        className="flex flex-wrap gap-1 border-b border-app bg-elev/40 px-2 py-1 rounded-t-xl"
+        className="flex gap-1 overflow-x-auto border-b border-app bg-elev/40 px-1 py-1 rounded-t-xl sm:flex-wrap sm:overflow-visible sm:px-2"
+        style={{ scrollbarWidth: 'thin' }}
       >
         {items.map((item) => {
           const isActive = item.id === activeId;
@@ -31,13 +32,13 @@ export default function Tabs({ items, activeId, onChange, className }: TabsProps
               aria-selected={isActive}
               onClick={() => onChange(item.id)}
               className={cn(
-                'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                'flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors sm:gap-2 sm:px-3 sm:py-2 sm:text-sm',
                 isActive
                   ? 'bg-sky-500/15 text-sky-300'
                   : 'text-fg-muted hover:bg-app hover:text-fg',
               )}
             >
-              {item.icon}
+              {item.icon && <span className="hidden sm:inline-flex">{item.icon}</span>}
               <span>{item.label}</span>
             </button>
           );

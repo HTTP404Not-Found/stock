@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { Send, Trash2, MessageSquareMore } from 'lucide-react';
 import { chatApi } from '@/api/client';
 import type { ChatMessage } from '@/types';
-import { cn } from '@/lib/utils';
+import { cn, formatNumber } from '@/lib/utils';
 
 interface ChatPanelProps {
   symbol: string;
@@ -33,6 +33,7 @@ function loadHistory(symbol: string): ChatMessage[] {
           m !== null &&
           'role' in m &&
           'content' in m &&
+          typeof (m as { content: unknown }).content === 'string' &&
           ((m as { role: unknown }).role === 'user' ||
             (m as { role: unknown }).role === 'assistant'),
       )
@@ -47,7 +48,7 @@ function saveHistory(symbol: string, history: ChatMessage[]): void {
     const sliced = history.slice(-MAX_HISTORY);
     localStorage.setItem(`${STORAGE_PREFIX}${symbol}`, JSON.stringify(sliced));
   } catch {
-    // ignore quota errors
+    // ignore quota errors / 隱私模式拒寫
   }
 }
 
@@ -63,6 +64,8 @@ export default function ChatPanel({ symbol }: ChatPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // 追蹤每個 toast 的 setTimeout id，確保不殘留且清理乾淨
+  const toastTimerRef = useRef<number | null>(null);
 
   // 切換 symbol 時載入對應的歷史
   useEffect(() => {
@@ -83,6 +86,16 @@ export default function ChatPanel({ symbol }: ChatPanelProps) {
     }
   }, [messages, sending]);
 
+  // 卸載時清掉 toast 計時器，避免 setState on unmounted component
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const apiHistory = useMemo(
     () => messages.slice(-20).map((m) => ({ role: m.role, content: m.content })),
     [messages],
@@ -102,18 +115,37 @@ export default function ChatPanel({ symbol }: ChatPanelProps) {
 
       try {
         const res = await chatApi.ask(symbol, q, apiHistory);
-        const assistantMsg: ChatMessage = { role: 'assistant', content: res.answer };
+        // 防禦：res 可能是 null/undefined 或缺欄位
+        const answer = (res && typeof res === 'object' && 'answer' in res && typeof res.answer === 'string')
+          ? res.answer
+          : '（無回應）';
+        const modelName = (res && typeof res === 'object' && 'model' in res && typeof res.model === 'string')
+          ? res.model
+          : 'LLM';
+        const tokens = (res && typeof res === 'object' && 'usage' in res && res.usage && typeof res.usage === 'object' && 'totalTokens' in res.usage)
+          ? res.usage.totalTokens
+          : undefined;
+        const assistantMsg: ChatMessage = { role: 'assistant', content: answer };
         setMessages((prev) => [...prev, assistantMsg]);
-        setToast({
-          model: res.model,
-          totalTokens: res.usage?.totalTokens,
-        });
-        // 3 秒後自動消 toast
-        window.setTimeout(() => setToast(null), 3000);
+        setToast({ model: modelName, totalTokens: tokens });
+        // 3 秒後自動消 toast，並用 ref 保留 id 以便 cleanup
+        if (toastTimerRef.current !== null) {
+          window.clearTimeout(toastTimerRef.current);
+        }
+        toastTimerRef.current = window.setTimeout(() => {
+          setToast(null);
+          toastTimerRef.current = null;
+        }, 3000);
       } catch (err: unknown) {
         const e = err as { response?: { data?: { message?: string } }; message?: string };
         const msg = e.response?.data?.message ?? e.message ?? '問股失敗';
-        setError(msg);
+        // ✅ 區分 503 訊息（key 沒設）給較清楚的提示
+        const e2 = err as { response?: { status?: number } };
+        if (e2.response?.status === 503) {
+          setError('LLM API key 尚未設定，請到設定頁填寫');
+        } else {
+          setError(msg);
+        }
         // 把 user 訊息留在 history（使用者可重發）
       } finally {
         setSending(false);
@@ -132,7 +164,16 @@ export default function ChatPanel({ symbol }: ChatPanelProps) {
   const handleClear = () => {
     if (!confirm('確定要清除這檔的所有對話紀錄嗎？')) return;
     setMessages([]);
+    // 順手清掉 localStorage 對應 key
+    try {
+      localStorage.removeItem(`${STORAGE_PREFIX}${symbol}`);
+    } catch {
+      // ignore
+    }
   };
+
+  // 🟦 v1 沒實作 streaming：這裡留 stub comment 以後接 EventSource / fetch stream
+  const supportsStreaming = false; // 若 v2 開 streaming，改成 true 再實作
 
   return (
     <div className="flex h-full flex-col gap-3 rounded-2xl border border-app bg-elev/30 p-4">
@@ -147,8 +188,8 @@ export default function ChatPanel({ symbol }: ChatPanelProps) {
               title={toast.totalTokens ? `token 用量 ${toast.totalTokens}` : undefined}
             >
               {toast.model}
-              {toast.totalTokens !== undefined && (
-                <span className="text-fg-muted">· {toast.totalTokens} tokens</span>
+              {toast.totalTokens !== undefined && Number.isFinite(toast.totalTokens) && (
+                <span className="text-fg-muted">· {formatNumber(toast.totalTokens, 0, '?')} tokens</span>
               )}
             </span>
           )}
@@ -186,6 +227,13 @@ export default function ChatPanel({ symbol }: ChatPanelProps) {
       {error && (
         <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
           {error}
+        </div>
+      )}
+
+      {/* streaming stub：v1 沒實作，未來要在這裡接 EventSource */}
+      {supportsStreaming && false && (
+        <div className="hidden" aria-hidden>
+          {/* placeholder for v2 streaming UI */}
         </div>
       )}
 

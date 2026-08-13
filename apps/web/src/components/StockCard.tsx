@@ -2,18 +2,19 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { ResponsiveContainer, LineChart, Line } from 'recharts';
 import { TrendingDown, TrendingUp } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, formatNumber, formatSigned, formatSignedPct } from '@/lib/utils';
 import type { Sentiment } from '@/types';
 
 export interface StockCardProps {
   symbol: string;
   name?: string;
-  price: number;
-  change: number;
-  changePct: number;
-  fairValue: number;
-  deviationPct: number;
-  sentiment: Sentiment;
+  /** 全部數字欄位都接受 undefined，內部會 fallback 0 */
+  price?: number;
+  change?: number;
+  changePct?: number;
+  fairValue?: number;
+  deviationPct?: number;
+  sentiment?: Sentiment;
 }
 
 const sentimentLabel: Record<Sentiment, string> = {
@@ -48,14 +49,24 @@ export default function StockCard({
   changePct,
   fairValue,
   deviationPct,
-  sentiment,
+  sentiment = 'neutral',
 }: StockCardProps) {
+  // sparkline 用 useMemo 避免重複計算（symbol 變才重算）
   const sparklineData = useMemo(() => buildSparkline(symbol), [symbol]);
 
-  const isUp = change >= 0;
+  // 注意：這裡直接用 Number.isFinite 判斷，「NaN/null/undefined」會落進 isFinite=false，
+  // 用 ?? 0 防止空白造成 (0).toFixed 顯示 0.00 但又保留 "0" 視覺上像沒資料
+  const priceText = formatNumber(price, 2, '—');
+  const isUp = Number.isFinite(change) ? (change as number) >= 0 : true;
   const UpDownIcon = isUp ? TrendingUp : TrendingDown;
-  const priceColor = isUp ? 'text-up' : 'text-down';
+  const priceColor = Number.isFinite(change) ? (isUp ? 'text-up' : 'text-down') : 'text-fg-muted';
   const lineColor = isUp ? 'var(--color-up)' : 'var(--color-down)';
+
+  const changeText = formatSigned(change, 2, '—');
+  const changePctText = formatSignedPct(changePct, 2, '—');
+  const fairValueText = formatNumber(fairValue, 2, '—');
+  const deviationText = formatSignedPct(deviationPct, 2, '—');
+  const deviationSign = Number.isFinite(deviationPct) ? (deviationPct as number) >= 0 : false;
 
   return (
     <Link
@@ -85,14 +96,12 @@ export default function StockCard({
       <div className="mt-3 flex items-end justify-between">
         <div>
           <div className={cn('text-2xl font-bold tabular-nums', priceColor)}>
-            {price.toFixed(2)}
+            {priceText}
           </div>
           <div className={cn('flex items-center gap-1 text-sm', priceColor)}>
             <UpDownIcon className="h-4 w-4" />
             <span className="tabular-nums">
-              {isUp ? '+' : ''}
-              {change.toFixed(2)} ({isUp ? '+' : ''}
-              {changePct.toFixed(2)}%)
+              {changeText} ({changePctText})
             </span>
           </div>
         </div>
@@ -116,18 +125,17 @@ export default function StockCard({
       <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
         <div className="rounded-lg bg-app/60 px-3 py-2">
           <div className="text-fg-muted">公允價值</div>
-          <div className="font-semibold tabular-nums">{fairValue.toFixed(2)}</div>
+          <div className="font-semibold tabular-nums">{fairValueText}</div>
         </div>
         <div className="rounded-lg bg-app/60 px-3 py-2">
           <div className="text-fg-muted">偏離</div>
           <div
             className={cn(
               'font-semibold tabular-nums',
-              deviationPct >= 0 ? 'text-up' : 'text-down',
+              deviationSign ? 'text-up' : 'text-down',
             )}
           >
-            {deviationPct >= 0 ? '+' : ''}
-            {deviationPct.toFixed(2)}%
+            {deviationText}
           </div>
         </div>
       </div>

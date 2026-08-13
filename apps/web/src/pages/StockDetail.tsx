@@ -1,27 +1,26 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, BarChart3, Building2, Calculator, LineChart,
-  MessageSquareMore, Newspaper, Wallet,
+  ArrowLeft, Building2, Calculator, LineChart,
+  MessageSquareMore, Newspaper,
 } from 'lucide-react';
 import Tabs, { type TabItem } from '@/components/Tabs';
 import Spinner from '@/components/Spinner';
 import EmptyState from '@/components/EmptyState';
 import ErrorBanner from '@/components/ErrorBanner';
 import ChatPanel from '@/components/ChatPanel';
-import PriceChart from '@/components/PriceChart';
+import PriceForecastChart from '@/components/PriceForecastChart';
+import MacdChart from '@/components/MacdChart';
 import { stocksApi, analysisApi } from '@/api/client';
 import type { Fundamentals, AnalystTargets, FairValueResult, PredictionResult, Quote } from '@/types';
 
-type TabId = 'overview' | 'fundamentals' | 'fairvalue' | 'targets' | 'forecast' | 'flows' | 'llm';
+type TabId = 'overview' | 'fundamentals' | 'fairvalue' | 'forecast' | 'llm';
 
 const TABS: TabItem[] = [
   { id: 'overview', label: '總覽', icon: <LineChart className="h-4 w-4" /> },
   { id: 'fundamentals', label: '基本面', icon: <Building2 className="h-4 w-4" /> },
   { id: 'fairvalue', label: '公允價值', icon: <Calculator className="h-4 w-4" /> },
-  { id: 'targets', label: '分析師目標', icon: <BarChart3 className="h-4 w-4" /> },
   { id: 'forecast', label: '走勢預測', icon: <LineChart className="h-4 w-4" /> },
-  { id: 'flows', label: '大單資金', icon: <Wallet className="h-4 w-4" /> },
   { id: 'llm', label: 'LLM 問股', icon: <MessageSquareMore className="h-4 w-4" /> },
 ];
 
@@ -58,17 +57,17 @@ export default function StockDetail() {
   }, [symbol]);
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    <main className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-6 lg:px-8">
       <Link to="/" className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg">
         <ArrowLeft className="h-4 w-4" />返回自選股
       </Link>
 
-      <header className="mt-3 flex flex-col gap-1 border-b border-app pb-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            {symbol || '—'}
+      <header className="mt-3 flex flex-col gap-3 border-b border-app pb-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <h1 className="flex flex-wrap items-baseline gap-x-2 text-xl font-bold tracking-tight sm:text-2xl">
+            <span>{symbol || '—'}</span>
             {quote && (
-              <span className="ml-3 text-base font-normal text-fg-muted">
+              <span className="text-base font-normal text-fg-muted sm:text-lg">
                 {quote.currency === 'HKD' ? 'HK$' : '$'}{quote.price.toFixed(2)}
                 {quote.changePct != null && (
                   <span className={quote.changePct >= 0 ? 'ml-2 text-emerald-400' : 'ml-2 text-rose-400'}>
@@ -78,9 +77,9 @@ export default function StockDetail() {
               </span>
             )}
           </h1>
-          <p className="text-sm text-fg-muted">即時行情 / 公允價值 / 風險指標</p>
+          <p className="text-xs text-fg-muted sm:text-sm">即時行情 / 公允價值 / 風險指標</p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-fg-muted">
+        <div className="hidden items-center gap-2 text-xs text-fg-muted sm:flex">
           <Newspaper className="h-4 w-4" /><span>資料來源：yfinance</span>
         </div>
       </header>
@@ -90,19 +89,16 @@ export default function StockDetail() {
       <section className="mt-6">
         <Tabs items={TABS} activeId={activeId} onChange={(id) => setActiveId(id as TabId)} />
 
-        <div className="rounded-b-xl border border-t-0 border-app bg-elev/30 p-6">
+        <div className="rounded-b-xl border border-t-0 border-app bg-elev/30 p-3 sm:p-6">
           {loading ? (
             <div className="flex items-center justify-center py-12"><Spinner size="lg" /></div>
           ) : (
             <>
-              {activeId === 'overview' && <OverviewTab quote={quote} symbol={symbol} />}
+              {activeId === 'overview' && <OverviewTab quote={quote} symbol={symbol} targets={targets} />}
               {activeId === 'fundamentals' && <FundamentalsTab fundamentals={fundamentals} />}
               {activeId === 'fairvalue' && <FairValueTab symbol={symbol} />}
-              {activeId === 'targets' && <TargetsTab targets={targets} />}
+              
               {activeId === 'forecast' && <ForecastTab symbol={symbol} />}
-              {activeId === 'flows' && (
-                <EmptyState title="大單資金（P1）" description="此功能將於 M3 階段上線，需整合交易所/券商逐筆成交資料。" />
-              )}
               {activeId === 'llm' && <ChatPanel symbol={symbol} />}
             </>
           )}
@@ -114,44 +110,85 @@ export default function StockDetail() {
 
 // ===== 各 Tab 子元件 =====
 
-function OverviewTab({ quote, symbol }: { quote: Quote | null; symbol: string }) {
+function OverviewTab({ quote, symbol, targets }: { quote: Quote | null; symbol: string; targets: AnalystTargets | null }) {
   if (!quote) return <EmptyState title="尚無報價" description="無法取得當前行情。" />;
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Metric label="現價" value={quote.price.toFixed(2)} suffix={quote.currency === 'HKD' ? 'HKD' : 'USD'} />
         <Metric label="漲跌" value={(quote.change ?? 0).toFixed(2)} tone={quote.change != null && quote.change >= 0 ? 'up' : 'down'} />
         <Metric label="漲跌%" value={quote.changePct != null ? `${(quote.changePct * 100).toFixed(2)}%` : '—'} tone={quote.changePct != null && quote.changePct >= 0 ? 'up' : 'down'} />
         <Metric label="報價時間" value={new Date(quote.asOf).toLocaleString('zh-TW')} />
       </div>
-      <p className="text-xs text-fg-muted">3 個月歷史收盤價（資料來源：yfinance）</p>
-      <PriceChart symbol={symbol} period="3mo" />
+
+      {targets && (
+        <div className="rounded-xl border border-app bg-elev/20 p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-semibold">分析師目標價</h3>
+            
+          </div>
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+            <Metric label="低點" value={(targets.low ?? 0).toFixed(2)} tone="down" />
+            <Metric label="平均" value={(targets.mean ?? 0).toFixed(2)} />
+            <Metric label="中位" value={targets.median?.toFixed(2) ?? '—'} />
+            <Metric label="高點" value={(targets.high ?? 0).toFixed(2)} tone="up" />
+          </div>
+          {targets.ratings && (
+            <div className="mt-3 flex flex-wrap gap-3 text-xs">
+              <span className="text-emerald-400">買入 {targets.ratings.buy}</span>
+              <span className="text-amber-400">持有 {targets.ratings.hold}</span>
+              <span className="text-rose-400">賣出 {targets.ratings.sell}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <PriceForecastChart symbol={symbol} historyPeriod="1y" />
+      <MacdChart symbol={symbol} period="6mo" />
     </div>
   );
 }
 
 function FundamentalsTab({ fundamentals }: { fundamentals: Fundamentals | null }) {
   if (!fundamentals) return <EmptyState title="尚無基本面" description="無法取得財報數據。" />;
+  // 額外欄位：毛利率 / 淨利率 / ROE / 市場預期（從 LLM 計算出來後會補上）
+  const f = fundamentals as Fundamentals & {
+    grossMargin?: number;
+    netMargin?: number;
+    roe?: number;
+    epsEstimate?: number;    // 市場預期 EPS（分析師共識）
+    revenueEstimate?: number; // 市場預期營收
+  };
   const items: Array<[string, string]> = [
-    ['市值', num(fundamentals.marketCap)],
-    ['本益比 PE', num(fundamentals.peRatio)],
-    ['股價淨值比 PB', num(fundamentals.pbRatio)],
-    ['EPS (TTM)', num(fundamentals.eps)],
-    ['每股淨值', num(fundamentals.bookValue)],
-    ['營收 (TTM)', num(fundamentals.revenue)],
-    ['股息殖利率', num(fundamentals.dividendYield)],
+    ['市值', num(f.marketCap)],
+    ['本益比 PE', num(f.peRatio)],
+    ['股價淨值比 PB', num(f.pbRatio)],
+    ['EPS (TTM)', num(f.eps)],
+    ['市場預期 EPS', num(f.epsEstimate)],
+    ['每股淨值', num(f.bookValue)],
+    ['營收 (TTM)', num(f.revenue)],
+    ['市場預期營收', num(f.revenueEstimate)],
+    ['毛利率', f.grossMargin != null ? `${(f.grossMargin * 100).toFixed(1)}%` : '—'],
+    ['淨利率', f.netMargin != null ? `${(f.netMargin * 100).toFixed(1)}%` : '—'],
+    ['ROE 股東權益報酬', f.roe != null ? `${(f.roe * 100).toFixed(1)}%` : '—'],
+    ['股息殖利率', num(f.dividendYield)],
   ];
   return (
-    <table className="w-full text-sm">
-      <tbody>
-        {items.map(([k, v]) => (
-          <tr key={k} className="border-b border-app/50">
-            <td className="py-2 text-fg-muted">{k}</td>
-            <td className="py-2 text-right font-mono">{v}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="space-y-3">
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-300">
+        💡 毛利率 / 淨利率 / ROE 與市場預期欄位需後端 LLM 計算後補上；目前 yfinance 僅回傳基本欄位。
+      </div>
+      <table className="w-full text-sm">
+        <tbody>
+          {items.map(([k, v]) => (
+            <tr key={k} className="border-b border-app/50">
+              <td className="py-2 text-fg-muted">{k}</td>
+              <td className="py-2 text-right font-mono">{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -188,30 +225,6 @@ function FairValueTab({ symbol }: { symbol: string }) {
           </div>
           <Metric label="信心度" value={`${(data.confidence * 100).toFixed(0)}%`} />
           <p className="rounded-lg border border-app bg-elev p-3 text-sm">{data.rationale}</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TargetsTab({ targets }: { targets: AnalystTargets | null }) {
-  if (!targets) return <EmptyState title="尚無分析師目標價" description="無法取得分析師數據。" />;
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-4 gap-3">
-        <Metric label="低點" value={num(targets.low)} tone="down" />
-        <Metric label="平均" value={num(targets.mean)} />
-        <Metric label="中位數" value={num(targets.median)} />
-        <Metric label="高點" value={num(targets.high)} tone="up" />
-      </div>
-      {targets.ratings && (
-        <div>
-          <h3 className="mb-2 text-sm font-medium">分析師評等分布</h3>
-          <div className="flex gap-4 text-sm">
-            <span className="text-emerald-400">買入: {targets.ratings.buy}</span>
-            <span className="text-amber-400">持有: {targets.ratings.hold}</span>
-            <span className="text-rose-400">賣出: {targets.ratings.sell}</span>
-          </div>
         </div>
       )}
     </div>

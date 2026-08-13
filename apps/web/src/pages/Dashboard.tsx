@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, RefreshCcw, Settings as SettingsIcon, Satellite, X } from 'lucide-react';
 import StockCard from '@/components/StockCard';
-import Spinner from '@/components/Spinner';
+
 import EmptyState from '@/components/EmptyState';
 import ErrorBanner from '@/components/ErrorBanner';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -65,8 +65,13 @@ export default function Dashboard() {
 
   const handleAdd = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    const v = draftTicker.trim();
+    const v = draftTicker.trim().toUpperCase();
     if (!v) return;
+    // 簡單格式驗證：只允許英文字母、數字、點、連字號（Yahoo Finance ticker 規則）
+    if (!/^[A-Z0-9.\-]{1,15}$/.test(v)) {
+      alert(`代碼格式無效：${v}（請用英文字母、數字、點或連字號，例如 AAPL 或 0700.HK）`);
+      return;
+    }
     try {
       await addSymbol(v);
       setDraftTicker('');
@@ -77,7 +82,7 @@ export default function Dashboard() {
   };
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    <main className="mx-auto max-w-7xl px-4 py-6 pb-24 sm:px-6 sm:pb-6 lg:px-8">
       {/* ---------- Header ---------- */}
       <header className="flex flex-col gap-3 border-b border-app pb-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
@@ -126,7 +131,7 @@ export default function Dashboard() {
               className="inline-flex items-center gap-1.5 rounded-lg bg-sky-500 px-3 py-2 text-sm font-medium text-white hover:bg-sky-400"
             >
               <Plus className="h-4 w-4" />
-              <span>新增</span>
+              <span className="hidden sm:inline">新增</span>
             </button>
           ) : (
             <form
@@ -208,11 +213,6 @@ export default function Dashboard() {
                   >
                     ✕
                   </button>
-                  {snap === null && (
-                    <div className="absolute inset-0 flex items-center justify-center rounded-2xl bg-app/40 text-xs text-fg-muted backdrop-blur-sm">
-                      <Spinner label="載入報價…" />
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -228,6 +228,18 @@ export default function Dashboard() {
           </Link>
         </div>
       </section>
+
+      {/* 手機版浮動新增按鈕（FAB） */}
+      {!showAddForm && (
+        <button
+          type="button"
+          onClick={() => setShowAddForm(true)}
+          aria-label="新增自選股"
+          className="fixed bottom-6 right-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-sky-500 text-white shadow-lg shadow-sky-500/30 hover:bg-sky-400 sm:hidden"
+        >
+          <Plus className="h-6 w-6" />
+        </button>
+      )}
 
       {/* ---------- Footer hint ---------- */}
       <footer className="mt-12 border-t border-app pt-4 text-xs text-fg-muted">

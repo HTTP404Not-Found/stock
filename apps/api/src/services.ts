@@ -24,7 +24,9 @@ import {
   readLLMConfigFromEnv,
   LLMConfigError,
   NotImplementedError,
+  OpenAICompatibleClient,
   type LLMClient,
+  type OpenAICompatibleConfig,
 } from '@fair-value-radar/llm-clients';
 import type {
   Quote, Fundamentals, OHLC, AnalystTargets, Symbol, Prediction, PredictionHorizon,
@@ -36,6 +38,95 @@ import {
 } from './prompts.js';
 
 // ===== dataService =====
+
+
+// ============================================================
+// LLM 回應處理（MiniMax-M2.7 是 reasoning model，會先 <think> 再給 JSON）
+// ============================================================
+
+/**
+ * 從 LLM 回應中抽出 JSON。
+ * 支援以下格式：
+ *   - 純 JSON：`{...}`
+ *   - 帶 markdown 圍欄：```json {...} ```
+ *   - 帶 reasoning 前綴：<think>...</think>{...}
+ *   - reasoning 與 JSON 混雜：<think>...{...}...<think>...{...}...
+ *   - 文字內嵌 JSON：先 ... 後 {...} 再 ...
+ */
+export class LLMUpstreamError extends Error {
+  override readonly name = 'LLMUpstreamError';
+  readonly code = 'llm_upstream_error';
+  readonly upstreamContent: string;
+  override readonly cause?: unknown;
+  readonly upstreamSample?: string;
+  constructor(message: string, cause?: unknown, upstreamSample?: string) {
+    super(message);
+    this.upstreamContent = upstreamSample ?? '';
+    if (cause !== undefined) this.cause = cause;
+    if (upstreamSample !== undefined) this.upstreamSample = upstreamSample;
+  }
+}
+
+export function extractJsonFromLLM<T = unknown>(raw: string): T {
+  if (typeof raw !== 'string') {
+    throw new LLMUpstreamError('LLM 回應不是字串');
+  }
+  const trimmed = raw.trim();
+
+  // 策略 1：整段就是 JSON
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      return JSON.parse(trimmed) as T;
+    } catch { /* 繼續往下 */ }
+  }
+
+  // 策略 2：包在 markdown 圍欄
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+  if (fence) {
+    try {
+      return JSON.parse(fence[1] ? fence[1].trim() : '{}') as T;
+    } catch { /* 繼續往下 */ }
+  }
+
+  // 策略 3：找最大 {...} 區塊（greedy）
+  // 用 balanced bracket scan：從每個 { 開始找對應的 }
+  let bestStart = -1, bestEnd = -1, bestLen = 0;
+  for (let i = 0; i < trimmed.length; i++) {
+    if (trimmed[i] !== '{') continue;
+    let depth = 1;
+    let j = i + 1;
+    while (j < trimmed.length && depth > 0) {
+      if (trimmed[j] === '\\') { j += 2; continue; } // skip escaped chars
+      if (trimmed[j] === '"') {
+        // skip string literal
+        let k = j + 1;
+        while (k < trimmed.length && trimmed[k] !== '"') {
+          if (trimmed[k] === '\\') k++;
+          k++;
+        }
+        j = k + 1;
+        continue;
+      }
+      if (trimmed[j] === '{') depth++;
+      else if (trimmed[j] === '}') depth--;
+      j++;
+    }
+    if (depth === 0 && j - i > bestLen) {
+      bestStart = i;
+      bestEnd = j;
+      bestLen = j - i;
+    }
+  }
+  if (bestStart >= 0) {
+    try {
+      return JSON.parse(trimmed.slice(bestStart, bestEnd)) as T;
+    } catch (e) {
+      throw new LLMUpstreamError('LLM 回應含 {...} 但無法解析為 JSON', e, trimmed.slice(bestStart, Math.min(bestEnd, bestStart + 300)));
+    }
+  }
+
+  throw new LLMUpstreamError('LLM 回應中找不到 JSON 物件', null, trimmed.slice(0, 300));
+}
 
 export const dataService = {
   async quote(s: Symbol | string): Promise<Quote> {
@@ -68,9 +159,21 @@ export const dataService = {
 
 // ===== llmService =====
 
+let _llmSingleton: LLMClient | null = null;
+
 function tryLLM(): LLMClient | null {
   try {
-    return createLLMClientFromEnv();
+    // 優先用 settings store（DB），fallback env
+    const cfg = getLLMConfig();
+    if (!cfg.apiKey) {
+      // 沒 key 試 env（讓 errorhandler 給 503）
+      return createLLMClientFromEnv();
+    }
+    return new OpenAICompatibleClient({
+      baseUrl: cfg.baseUrl,
+      apiKey: cfg.apiKey,
+      model: cfg.model,
+    });
   } catch (err) {
     if (err instanceof LLMConfigError) return null;
     throw err;
@@ -79,7 +182,10 @@ function tryLLM(): LLMClient | null {
 
 export const llmService = {
   hasKey(): boolean {
-    try { readLLMConfigFromEnv(); return true; } catch { return false; }
+    try {
+      const cfg = getLLMConfig();
+      return !!cfg.apiKey;
+    } catch { return false; }
   },
   async chat(symbol: Symbol | string, question: string, history?: Array<{ role: 'user'|'assistant'; content: string }>): Promise<{ answer: string; model: string; usage?: { totalTokens: number } }> {
     const client = tryLLM();
@@ -143,9 +249,10 @@ export const analysisService = {
     const resp = await client.chat({ messages, temperature: 0.3, maxTokens: 600, jsonMode: true });
     let parsed: z.infer<typeof FairValueSchema>;
     try {
-      parsed = FairValueSchema.parse(JSON.parse(resp.content));
+      parsed = FairValueSchema.parse(extractJsonFromLLM(resp.content));
     } catch (parseErr) {
-      throw new Error(`LLM 回應無法解析為公允價值 JSON: ${resp.content.slice(0, 200)}`, { cause: parseErr });
+      if (parseErr instanceof LLMUpstreamError) throw parseErr;
+      throw new LLMUpstreamError(`LLM 回應無法解析為公允價值 JSON`, parseErr, String(resp.content).slice(0, 200));
     }
     await watchlistStore.insertPrediction(sym.ticker, '12m', parsed.mean, parsed.confidence, parsed.rationale, resp.model);
     return { ...parsed, model: resp.model };
@@ -175,9 +282,10 @@ export const analysisService = {
     const resp = await client.chat({ messages, temperature: 0.3, maxTokens: 500, jsonMode: true });
     let parsed: z.infer<typeof PredictionSchema>;
     try {
-      parsed = PredictionSchema.parse({ ...JSON.parse(resp.content), horizon });
+      parsed = PredictionSchema.parse({ ...extractJsonFromLLM<Record<string, unknown>>(resp.content), horizon });
     } catch (parseErr) {
-      throw new Error(`LLM 回應無法解析為預測 JSON: ${resp.content.slice(0, 200)}`, { cause: parseErr });
+      if (parseErr instanceof LLMUpstreamError) throw parseErr;
+      throw new LLMUpstreamError(`LLM 回應無法解析為預測 JSON`, parseErr, String(resp.content).slice(0, 200));
     }
     await watchlistStore.insertPrediction(sym.ticker, horizon, parsed.fairValue, parsed.confidence, parsed.rationale, resp.model);
     return { symbol: sym, horizon: parsed.horizon, fairValue: parsed.fairValue, confidence: parsed.confidence, rationale: parsed.rationale, generatedAt: Math.floor(Date.now()/1000), model: resp.model };
@@ -254,3 +362,109 @@ export const watchlistStore = {
       .run(ticker.toUpperCase(), horizon, fairValue, confidence, rationale, model ?? null, Math.floor(Date.now()/1000));
   },
 };
+
+// ============================================================
+// 設定（持久化 SQLite，重啟容器不丟）
+// ============================================================
+
+export interface ApiSettings {
+  openaiBaseUrl: string;
+  openaiApiKey: string;       // 注意：API key 在 SQLite 是明文，v1 個人用可接受
+  openaiModel: string;
+  searxngUrl: string;
+  schedule: string;            // HH:MM 排程（v1 未實作）
+}
+
+export const DEFAULT_SETTINGS: ApiSettings = {
+  openaiBaseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.minimaxi.com/v1',
+  openaiApiKey: process.env.OPENAI_API_KEY ?? '',
+  openaiModel: process.env.OPENAI_MODEL ?? 'MiniMax-M2.7',
+  searxngUrl: process.env.SEARXNG_URL ?? 'http://host.docker.internal:8888',
+  schedule: '08:00',
+};
+
+/** 讀當前生效的 LLM 設定（DB 優先，env fallback） */
+export function getLLMConfig(): { baseUrl: string; apiKey: string; model: string } {
+  const dbSettings = readSettingsFromDb();
+  return {
+    baseUrl: dbSettings?.openaiBaseUrl ?? DEFAULT_SETTINGS.openaiBaseUrl,
+    apiKey: dbSettings?.openaiApiKey ?? DEFAULT_SETTINGS.openaiApiKey,
+    model: dbSettings?.openaiModel ?? DEFAULT_SETTINGS.openaiModel,
+  };
+}
+
+function dbInstance(): Database.Database { return db(); }
+
+function readSettingsFromDb(): ApiSettings | null {
+  try {
+    const db = dbInstance();
+    if (!db) return null;
+    const row = db.prepare('SELECT openai_base_url, openai_api_key, openai_model, searxng_url, schedule FROM settings WHERE id = 1').get() as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      openaiBaseUrl: typeof row.openai_base_url === 'string' ? row.openai_base_url : DEFAULT_SETTINGS.openaiBaseUrl,
+      openaiApiKey: typeof row.openai_api_key === 'string' ? row.openai_api_key : DEFAULT_SETTINGS.openaiApiKey,
+      openaiModel: typeof row.openai_model === 'string' ? row.openai_model : DEFAULT_SETTINGS.openaiModel,
+      searxngUrl: typeof row.searxng_url === 'string' ? row.searxng_url : DEFAULT_SETTINGS.searxngUrl,
+      schedule: typeof row.schedule === 'string' ? row.schedule : DEFAULT_SETTINGS.schedule,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 不回傳 api key 但顯示 mask 與 source */
+export function getApiSettingsResponse(): ApiSettings & { hasKey: boolean; keySource: 'db' | 'env' | 'none' } {
+  const dbSettings = readSettingsFromDb();
+  const envSettings = DEFAULT_SETTINGS;
+  const baseSettings = dbSettings ?? envSettings;
+  const dbHasKey = !!dbSettings?.openaiApiKey;
+  const envHasKey = !!envSettings.openaiApiKey;
+  return {
+    ...baseSettings,
+    openaiApiKey: dbHasKey ? '***已設定***' : envHasKey ? '***(env)***' : '',
+    hasKey: dbHasKey || envHasKey,
+    keySource: dbHasKey ? 'db' : envHasKey ? 'env' : 'none',
+  };
+}
+
+export function patchSettings(patch: Partial<ApiSettings>): ApiSettings {
+  const db = dbInstance();
+  // 確保 table 存在
+  db.exec(`CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    openai_base_url TEXT NOT NULL DEFAULT '',
+    openai_api_key TEXT NOT NULL DEFAULT '',
+    openai_model TEXT NOT NULL DEFAULT '',
+    searxng_url TEXT NOT NULL DEFAULT '',
+    schedule TEXT NOT NULL DEFAULT '08:00',
+    updated_at INTEGER NOT NULL
+  )`);
+  // 確保 row id=1 存在
+  const exists = db.prepare('SELECT id FROM settings WHERE id = 1').get();
+  if (!exists) {
+    db.prepare(`INSERT INTO settings (id, openai_base_url, openai_api_key, openai_model, searxng_url, schedule, updated_at)
+               VALUES (1, '', '', '', '', '08:00', ?)`).run(Math.floor(Date.now() / 1000));
+  }
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  if (patch.openaiBaseUrl !== undefined) { sets.push('openai_base_url = ?'); values.push(patch.openaiBaseUrl); }
+  if (patch.openaiApiKey !== undefined) { sets.push('openai_api_key = ?'); values.push(patch.openaiApiKey); }
+  if (patch.openaiModel !== undefined) { sets.push('openai_model = ?'); values.push(patch.openaiModel); }
+  if (patch.searxngUrl !== undefined) { sets.push('searxng_url = ?'); values.push(patch.searxngUrl); }
+  if (patch.schedule !== undefined) { sets.push('schedule = ?'); values.push(patch.schedule); }
+  if (sets.length > 0) {
+    sets.push('updated_at = ?');
+    values.push(Math.floor(Date.now() / 1000));
+    db.prepare(`UPDATE settings SET ${sets.join(', ')} WHERE id = 1`).run(...values);
+  }
+  // 清掉 LLM singleton 緩存
+  _llmSingleton = null;
+  const updated = readSettingsFromDb();
+  return updated ?? DEFAULT_SETTINGS;
+}
+
+export function clearApiKey(): ApiSettings {
+  return patchSettings({ openaiApiKey: '' });
+}
+

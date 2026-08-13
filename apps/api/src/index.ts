@@ -80,6 +80,64 @@ app.get<{ Params: { symbol: string } }>('/api/v1/stocks/:symbol/snapshot', async
 // ===== 自選股 =====
 app.get('/api/v1/watchlist', async () => watchlistStore.list());
 
+// ===== 設定（持久化 SQLite，重啟容器不丟）=====
+import { getApiSettingsResponse, patchSettings, clearApiKey, DEFAULT_SETTINGS, getLLMConfig } from './services.js';
+
+// SettingsPatchSchema 移除：直接用 Record<string, unknown> 處理（避免 Fastify ajv 驗證衝突）
+
+app.get('/api/v1/settings', async () => getApiSettingsResponse());
+
+app.put('/api/v1/settings', async (req) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const updated = patchSettings({
+    openaiBaseUrl: typeof body.openaiBaseUrl === 'string' ? body.openaiBaseUrl : undefined,
+    openaiApiKey: typeof body.openaiApiKey === 'string' ? body.openaiApiKey : undefined,
+    openaiModel: typeof body.openaiModel === 'string' ? body.openaiModel : undefined,
+    searxngUrl: typeof body.searxngUrl === 'string' ? body.searxngUrl : undefined,
+    schedule: typeof body.schedule === 'string' ? body.schedule : undefined,
+  });
+  return { ...updated, hasKey: !!updated.openaiApiKey, keySource: updated.openaiApiKey ? 'db' : 'env' };
+});
+
+app.delete('/api/v1/settings/openai-api-key', async () => {
+  const cleared = clearApiKey();
+  return { ...cleared, hasKey: false, keySource: 'none', message: '已清除 API key' };
+});
+
+// 測試 LLM 連線（用目前 settings 真的 call 一次）
+app.post('/api/v1/settings/test', async (req, reply) => {
+  try {
+    const cfg = getLLMConfig();
+    if (!cfg.apiKey) {
+      return reply.status(503).send({ ok: false, message: '尚未設定 API key' });
+    }
+    // 用 minimal test prompt
+    const testResp = await fetch(`${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 1,
+      }),
+    });
+    if (!testResp.ok) {
+      const errText = await testResp.text();
+      return reply.status(502).send({
+        ok: false,
+        message: `${testResp.status}: ${errText.slice(0, 200)}`,
+      });
+    }
+    const data = await testResp.json() as { model?: string };
+    return { ok: true, model: data.model ?? cfg.model };
+  } catch (e) {
+    return reply.status(502).send({ ok: false, message: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 const AddWatchSchema = z.object({ ticker: z.string().min(1).max(20) });
 app.post<{ Body: z.infer<typeof AddWatchSchema> }>('/api/v1/watchlist', async (req, reply) => {
   const body = AddWatchSchema.parse(req.body);
@@ -152,6 +210,12 @@ app.setErrorHandler((error, request, reply) => {
   if (err instanceof DataProviderError) {
     request.log.error({ err: err.message }, '資料源錯誤');
     reply.status(502).send({ error: err.code, message: err.message });
+    return;
+  }
+  // LLM 回應格式無法解析（reasoning model 沒給 JSON）→ 502
+  if (err.name === 'LLMUpstreamError' || (err as { code?: string }).code === 'llm_upstream_error') {
+    request.log.error({ err: err.message, sample: (err as { upstreamContent?: string }).upstreamContent?.slice(0, 200) }, 'LLM 上游回應無法解析');
+    reply.status(502).send({ error: 'llm_upstream_error', message: err.message });
     return;
   }
   // NotImplemented → 501
