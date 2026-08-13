@@ -197,7 +197,16 @@ export const llmService = {
       ...((history ?? []).map((h) => ({ role: h.role, content: h.content })) as Array<{role:'system'|'user'|'assistant';content:string}>),
       { role: 'user' as const, content: buildChatUserPrompt(sym.ticker, question, ctx) },
     ];
-    const resp = await client.chat({ messages, temperature: 0.4, maxTokens: 800 });
+    let resp;
+    try {
+      resp = await client.chat({ messages, temperature: 0.4, maxTokens: 800 });
+    } catch (err) {
+      throw new LLMUpstreamError(
+        `LLM 呼叫失敗: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+        undefined,
+      );
+    }
     return {
       answer: resp.content,
       model: resp.model,
@@ -246,7 +255,17 @@ export const analysisService = {
         fundamentals: fundMap, analystTargets: ctx.analystTargets,
       }) },
     ];
-    const resp = await client.chat({ messages, temperature: 0.3, maxTokens: 600, jsonMode: true });
+    let resp;
+    try {
+      resp = await client.chat({ messages, temperature: 0.3, maxTokens: 600, jsonMode: true });
+    } catch (err) {
+      // LLM 上游錯誤（401/403/422/500/網路）→ 502 Bad Gateway
+      throw new LLMUpstreamError(
+        `LLM 呼叫失敗: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+        undefined,
+      );
+    }
     let parsed: z.infer<typeof FairValueSchema>;
     try {
       parsed = FairValueSchema.parse(extractJsonFromLLM(resp.content));
@@ -279,7 +298,16 @@ export const analysisService = {
         currentPrice: ctx.quote.price, fundamentals: fundMap,
       }) },
     ];
-    const resp = await client.chat({ messages, temperature: 0.3, maxTokens: 500, jsonMode: true });
+    let resp;
+    try {
+      resp = await client.chat({ messages, temperature: 0.3, maxTokens: 500, jsonMode: true });
+    } catch (err) {
+      throw new LLMUpstreamError(
+        `LLM 呼叫失敗: ${err instanceof Error ? err.message : String(err)}`,
+        err,
+        undefined,
+      );
+    }
     let parsed: z.infer<typeof PredictionSchema>;
     try {
       parsed = PredictionSchema.parse({ ...extractJsonFromLLM<Record<string, unknown>>(resp.content), horizon });
