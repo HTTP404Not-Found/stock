@@ -73,7 +73,12 @@ export default function Dashboard() {
       return;
     }
     try {
-      await addSymbol(v);
+      // 自動補 0：3-5 位數港股代碼 → 自動補成 5 位 + .HK（用戶輸入 9660 → 09660.HK）
+      let normalized = v;
+      if (/^\d{3,5}$/.test(v)) {
+        normalized = v.padStart(5, '0') + '.HK';
+      }
+      await addSymbol(normalized);
       setDraftTicker('');
       setShowAddForm(false);
     } catch {
@@ -191,7 +196,7 @@ export default function Dashboard() {
 
               return (
                 <div key={sym} className="relative group">
-                  {snap ? (
+                  {snap && Number.isFinite(snap.price) && snap.price > 0 ? (
                     <StockCard
                       symbol={snap.symbol}
                       name={snap.name}
@@ -202,14 +207,23 @@ export default function Dashboard() {
                       deviationPct={deviation ?? 0}
                       sentiment={sentiment}
                     />
-                  ) : (
+                  ) : refreshing && !snap ? (
                     <StockCardSkeleton />
+                  ) : (
+                    <div className="flex h-full min-h-[180px] flex-col items-center justify-center gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/5 p-5 text-center text-sm text-rose-300">
+                      <span className="font-medium">⚠️ {sym} 抓不到資料</span>
+                      <span className="text-xs text-fg-muted">代碼可能不存在（9660.HK 應為 09660.HK），按 ✕ 移除</span>
+                    </div>
                   )}
+                  {/* 永久顯示的刪除按鈕：mobile 必看、desktop 會更亮 */}
                   <button
                     type="button"
-                    onClick={() => void removeSymbol(sym)}
-                    className="absolute right-2 top-2 rounded-md bg-elev/80 px-1.5 py-0.5 text-xs text-fg-muted opacity-0 transition-opacity hover:bg-rose-500/15 hover:text-rose-400 group-hover:opacity-100"
+                    onClick={() => {
+                      if (confirm(`從自選股移除「${sym}」？`)) void removeSymbol(sym);
+                    }}
+                    className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full border border-rose-500/30 bg-elev/80 text-xs text-rose-400 shadow-sm transition-colors hover:bg-rose-500 hover:text-white sm:opacity-0 sm:group-hover:opacity-100"
                     aria-label={`移除 ${sym}`}
+                    title="移除"
                   >
                     ✕
                   </button>
