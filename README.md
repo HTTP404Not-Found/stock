@@ -4,6 +4,10 @@
 
 個人使用的投資決策輔助工具。**v1 已完成並通過 docker compose 真實端到端驗證**。
 
+> ⚠️ **關於此 repo**：這個 GitHub repo (`HTTP404Not-Found/stock`) 是用來**託管 fair-value-radar 程式碼**的容器，repo 名稱沿用之前的空 repo。**所有內容都是 fair-value-radar**，不是 stock 相關框架。
+
+📌 **GitHub 源碼**：https://github.com/HTTP404Not-Found/stock
+
 ---
 
 ## ✨ 功能（v1 已上線）
