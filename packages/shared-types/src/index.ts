@@ -121,3 +121,13 @@ export interface Pagination {
   page: number;
   pageSize: number;
 }
+
+
+/** /stocks/:sym/snapshot 端點的回傳型別（綜合 quote + fundamentals + analystTargets） */
+export interface SnapshotResponse {
+  symbol: Symbol;
+  quote: Quote;
+  fundamentals?: Fundamentals;
+  analystTargets?: AnalystTargets;
+  generatedAt?: number;
+}

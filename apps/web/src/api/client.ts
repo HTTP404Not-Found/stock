@@ -72,7 +72,8 @@ api.interceptors.response.use(
 // ====== Typed API surface ======
 // 後端回傳的結構完全符合 shared-types，這裡直接重用，無需另外宣告 DTO。
 import type {
-  Quote, Fundamentals, OHLC, AnalystTargets,
+  Quote, Fundamentals, OHLC, AnalystTargets, SnapshotResponse,
+
   Prediction, PredictionHorizon,
 } from '@fair-value-radar/shared-types';
 
@@ -87,8 +88,8 @@ export const stocksApi = {
     }).then((r) => r.data),
   analystTargets: (symbol: string): Promise<AnalystTargets> =>
     api.get<AnalystTargets>(`/stocks/${encodeURIComponent(symbol)}/analyst-targets`).then((r) => r.data),
-  snapshot: (symbol: string) =>
-    api.get(`/stocks/${encodeURIComponent(symbol)}/snapshot`).then((r) => r.data),
+  snapshot: (symbol: string): Promise<SnapshotResponse> =>
+    api.get<SnapshotResponse>(`/stocks/${encodeURIComponent(symbol)}/snapshot`).then((r) => r.data),
 };
 
 export const watchlistApi = {

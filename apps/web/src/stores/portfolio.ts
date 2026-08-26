@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { stocksApi, watchlistApi } from '@/api/client';
-import type { Quote } from '@fair-value-radar/shared-types';
+import type { SnapshotResponse } from '@fair-value-radar/shared-types';
 import type { Sentiment, StockSnapshot } from '@/types';
 
 interface PortfolioState {
@@ -26,14 +26,27 @@ interface PortfolioState {
  *   price 是必填，其他都是 optional，
  *   sentiment 預設 neutral（等有 fairValue 再算）。
  */
-function quoteToSnapshot(q: Quote): StockSnapshot {
+/** 從 /stocks/:sym/snapshot 端點的 Response 物件抽出 quote 部分 */
+function snapshotResponseToSnapshot(data: SnapshotResponse): StockSnapshot {
+  const q = data.quote;
   const snap: StockSnapshot = {
     symbol: q.symbol.ticker,
+    name: undefined,
     price: q.price,
+    change: q.change,
+    changePct: q.changePct,
+    fairValue: undefined,
+    deviationPct: undefined,
+    sentiment: 'neutral',
   };
-  if (q.change !== undefined) snap.change = q.change;
-  if (q.changePct !== undefined) snap.changePct = q.changePct;
-  snap.sentiment = 'neutral';
+  // analystTargets?.mean 可以當 fairValue（如果沒單獨跑 LLM 公允價值）
+  const targets = data.analystTargets as { mean?: number; low?: number; high?: number } | undefined;
+  if (targets?.mean) {
+    snap.fairValue = targets.mean;
+    if (q.price && targets.low != null && targets.high != null) {
+      snap.deviationPct = ((q.price - targets.mean) / targets.mean) * 100;
+    }
+  }
   return snap;
 }
 
@@ -132,7 +145,10 @@ export const usePortfolioStore = create<PortfolioState>()(
         set({ refreshing: true, error: null });
         try {
           const results = await Promise.allSettled(
-            watchlist.map((sym) => stocksApi.snapshot(sym).then((q) => [sym, q] as const)),
+            watchlist.map(async (sym) => {
+              const data = await stocksApi.snapshot(sym);
+              return [sym, data] as const;
+            }),
           );
 
           const next: Record<string, StockSnapshot | null> = { ...get().snapshots };
@@ -140,9 +156,8 @@ export const usePortfolioStore = create<PortfolioState>()(
 
           for (const r of results) {
             if (r.status === 'fulfilled') {
-              const [sym, q] = r.value;
-              const snap = quoteToSnapshot(q);
-              // snapshot endpoint 通常包含 fairValue；後端若沒回，保持 neutral
+              const [sym, data] = r.value;
+              const snap = snapshotResponseToSnapshot(data);
               next[sym] = snap;
             } else {
               const reason = r.reason as { message?: string };
